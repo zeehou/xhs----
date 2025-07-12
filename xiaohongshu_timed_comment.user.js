@@ -1,11 +1,7 @@
 // ==UserScript==
 // @name         小红书定时精准评论 (带时钟)
 // @namespace    http://tampermonkey.net/
-<<<<<<< HEAD
-// @version      1.6
-=======
-// @version      1.7
->>>>>>> 6668bfb (refactor: 优化定时评论脚本的代码结构和错误处理)
+// @version      1.8
 // @description  在特定小红书页面，于北京时间00:30:00精准发送评论“p”，并显示北京时间和倒计时。
 // @author       Gemini
 // @match        https://www.xiaohongshu.com/explore/*
@@ -86,57 +82,10 @@
         if(countdownEl) countdownEl.textContent = "状态: 已发送!";
     }
 
-<<<<<<< HEAD
-    /**
-     * 获取网络时间并设置定时器
-     */
-=======
->>>>>>> 6668bfb (refactor: 优化定时评论脚本的代码结构和错误处理)
     function scheduleComment() {
         GM_log('正在获取精准网络时间以安排评论...');
         createUI();
 
-<<<<<<< HEAD
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url: TIME_API_URL,
-            onload: function(response) {
-                try {
-                    const data = JSON.parse(response.responseText);
-                    // 苏宁API返回格式: {"sysTime1":"2025-07-12 17:00:00","sysTime2":"20250712170000"}
-                    // API时间是北京时间 (UTC+8)。我们必须指明时区，否则Date.parse会使用本地时区。
-                    const formattedTime = data.sysTime1.replace(' ', 'T') + '+08:00';
-                    const serverTimeOnLoad = new Date(formattedTime).getTime();
-                    const localTimeOnLoad = Date.now();
-                    // timeDifference 用于校准本地时钟与服务器时钟的偏差
-                    const timeDifference = serverTimeOnLoad - localTimeOnLoad;
-
-                    // --- 使用UTC进行所有日期计算以避免时区问题 ---
-                    const serverNow = new Date(serverTimeOnLoad);
-                    GM_log(`当前服务器时间 (UTC): ${serverNow.toISOString()}`);
-
-                    // 设定目标时间为北京时间 00:30:00
-                    // 北京时间 (UTC+8) 的 00:30 对应 UTC 时间的 16:30
-                    const targetUTCHour = (TARGET_HOUR_BEIJING - 8 + 24) % 24;
-
-                    // 更稳健地构建目标时间
-                    // 1. 获取当前的UTC日期部分
-                    const year = serverNow.getUTCFullYear();
-                    const month = serverNow.getUTCMonth();
-                    const day = serverNow.getUTCDate();
-
-                    // 2. 构建今天的目标时间点 (UTC)
-                    let targetTime = new Date(Date.UTC(year, month, day, targetUTCHour, TARGET_MINUTE_BEIJING, TARGET_SECOND_BEIJING, 0));
-                    GM_log(`初步计算的目标时间 (UTC): ${targetTime.toISOString()}`);
-
-
-                    // 3. 如果目标时间点已经过去，则将目标设置为明天
-                    if (targetTime.getTime() < serverNow.getTime()) {
-                        targetTime.setUTCDate(targetTime.getUTCDate() + 1);
-                        GM_log('今天的时间点已过，已将目标设定为明天。');
-                    }
-                    GM_log(`最终确定的目标时间 (UTC): ${targetTime.toISOString()}`);
-=======
         const MAX_RETRIES = 3;
 
         function fetchTimeWithRetries(retriesLeft) {
@@ -151,9 +100,32 @@
                         const data = JSON.parse(response.responseText);
                         if (!data || !data.sysTime1) { throw new Error("API响应格式不完整。"); }
 
-                        const formattedTime = data.sysTime1.replace(' ', 'T') + '+08:00';
-                        const serverTimeOnLoad = new Date(formattedTime).getTime();
-                        if (isNaN(serverTimeOnLoad)) { throw new Error(`无效的日期格式: "${formattedTime}"`); }
+                        let formattedTime;
+                        const rawTime = data.sysTime1;
+
+                        // 检查API返回的时间格式并进行相应处理
+                        if (rawTime.includes('-')) {
+                            // 格式: "YYYY-MM-DD HH:MM:SS"
+                            formattedTime = rawTime.replace(' ', 'T');
+                        } else if (rawTime.length === 14 && !isNaN(rawTime)) {
+                            // 格式: "YYYYMMDDHHMMSS"
+                            const year   = rawTime.substring(0, 4);
+                            const month  = rawTime.substring(4, 6);
+                            const day    = rawTime.substring(6, 8);
+                            const hour   = rawTime.substring(8, 10);
+                            const minute = rawTime.substring(10, 12);
+                            const second = rawTime.substring(12, 14);
+                            formattedTime = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+                        } else {
+                            // 未知或错误的格式
+                            throw new Error(`未知的日期格式: "${rawTime}"`);
+                        }
+
+                        // 所有格式都必须附加时区信息才能被正确解析
+                        const isoTimeWithTimezone = formattedTime + '+08:00';
+                        const serverTimeOnLoad = new Date(isoTimeWithTimezone).getTime();
+
+                        if (isNaN(serverTimeOnLoad)) { throw new Error(`无法将处理后的日期解析为有效时间: "${isoTimeWithTimezone}"`); }
 
                         const timeDifference = serverTimeOnLoad - Date.now();
                         const serverNow = new Date(serverTimeOnLoad);
@@ -161,59 +133,12 @@
 
                         const targetUTCHour = (TARGET_HOUR_BEIJING - 8 + 24) % 24;
                         let targetTime = new Date(Date.UTC(serverNow.getUTCFullYear(), serverNow.getUTCMonth(), serverNow.getUTCDate(), targetUTCHour, TARGET_MINUTE_BEIJING, TARGET_SECOND_BEIJING, 0));
->>>>>>> 6668bfb (refactor: 优化定时评论脚本的代码结构和错误处理)
 
-                    const mainDelay = targetTime.getTime() - serverNow.getTime();
-                    GM_log(`计算出的延迟毫秒数: ${mainDelay}`);
+                        if (targetTime.getTime() < serverNow.getTime()) {
+                            targetTime.setUTCDate(targetTime.getUTCDate() + 1);
+                        }
+                        GM_log(`最终目标UTC时间: ${targetTime.toISOString()}`);
 
-<<<<<<< HEAD
-                    if (mainDelay >= 0) { // 允许延迟为0
-                        setTimeout(postComment, mainDelay);
-
-                        // 启动UI更新定时器
-                        clockInterval = setInterval(() => {
-                            const currentSyncedTime = new Date(Date.now() + timeDifference);
-                            const remainingMillis = targetTime.getTime() - currentSyncedTime.getTime();
-
-                            if (remainingMillis <= 0) {
-                                clearInterval(clockInterval);
-                                // 倒计时结束后，确保UI显示为0或已发送
-                                const countdownEl = document.getElementById('gemini-countdown');
-                                if (countdownEl && countdownEl.textContent.startsWith("倒计时")) {
-                                     countdownEl.textContent = "倒计时: 00:00:00";
-                                }
-                                return;
-                            }
-
-                            // 更新北京时间显示
-                            // 使用 toLocaleTimeString 来确保正确显示北京时区的时间
-                            const beijingTimeString = currentSyncedTime.toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false });
-                            document.getElementById('gemini-beijing-time').textContent = `北京时间: ${beijingTimeString}`;
-
-
-                            // 更新倒计时显示
-                            const hours = padZero(Math.floor(remainingMillis / 3600000));
-                            const minutes = padZero(Math.floor((remainingMillis % 3600000) / 60000));
-                            const seconds = padZero(Math.floor((remainingMillis % 60000) / 1000));
-                            document.getElementById('gemini-countdown').textContent = `倒计时: ${hours}:${minutes}:${seconds}`;
-
-                        }, 1000);
-
-                    } else {
-                         GM_log('计算出的延迟时间不正确，脚本停止。');
-                    }
-
-                } catch (e) {
-                    GM_log(`解析时间API响应失败: ${e}`);
-                    document.getElementById('gemini-countdown').textContent = "状态: 时间同步失败";
-                }
-            },
-            onerror: function(error) {
-                GM_log(`请求时间API失败: ${JSON.stringify(error)}`);
-                document.getElementById('gemini-countdown').textContent = "状态: 时间同步失败";
-            }
-        });
-=======
                         const mainDelay = targetTime.getTime() - serverNow.getTime();
                         if (mainDelay >= 0) {
                             setTimeout(postComment, mainDelay);
@@ -264,7 +189,6 @@
             });
         }
         fetchTimeWithRetries(MAX_RETRIES);
->>>>>>> 6668bfb (refactor: 优化定时评论脚本的代码结构和错误处理)
     }
 
     scheduleComment();
