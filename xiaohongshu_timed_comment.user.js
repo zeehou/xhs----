@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小红书定时精准评论 (带时钟)
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  在特定小红书页面，于北京时间00:30:00精准发送评论“p”，并显示北京时间和倒计时。
 // @author       Gemini
 // @match        https://www.xiaohongshu.com/explore/*
@@ -105,119 +105,100 @@
     /**
      * 获取网络时间并设置定时器
      */
-    """    function scheduleComment() {
+    function scheduleComment() {
         GM_log('正在获取精准网络时间以安排评论...');
         createUI(); // 创建UI界面
 
-        const MAX_RETRIES = 3; // 设置最大重试次数
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: TIME_API_URL,
+            onload: function(response) {
+                try {
+                    const data = JSON.parse(response.responseText);
+                    // 苏宁API返回格式: {"sysTime1":"2025-07-12 17:00:00","sysTime2":"20250712170000"}
+                    // API时间是北京时间 (UTC+8)。我们必须指明时区，否则Date.parse会使用本地时区。
+                    const formattedTime = data.sysTime1.replace(' ', 'T') + '+08:00';
+                    const serverTimeOnLoad = new Date(formattedTime).getTime();
+                    const localTimeOnLoad = Date.now();
+                    // timeDifference 用于校准本地时钟与服务器时钟的偏差
+                    const timeDifference = serverTimeOnLoad - localTimeOnLoad;
 
-        function fetchTimeWithRetries(retriesLeft) {
-            GM_log(`尝试获取时间... (剩余次数: ${retriesLeft})`);
+                    // --- 使用UTC进行所有日期计算以避免时区问题 ---
+                    const serverNow = new Date(serverTimeOnLoad);
+                    GM_log(`当前服务器时间 (UTC): ${serverNow.toISOString()}`);
 
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: TIME_API_URL,
-                timeout: 5000, // 设置5秒超时
-                onload: function(response) {
-                    try {
-                        // --- 增强的防御性检查 ---
-                        if (!response.responseText) {
-                            throw new Error("API响应为空。");
-                        }
-                        const data = JSON.parse(response.responseText);
-                        if (!data || !data.sysTime1) {
-                            GM_log(`[错误] API响应格式不完整: ${response.responseText}`);
-                            throw new Error("API响应格式不完整或缺少sysTime1字段。");
-                        }
+                    // 设定目标时间为北京时间 00:30:00
+                    // 北京时间 (UTC+8) 的 00:30 对应 UTC 时间的 16:30
+                    const targetUTCHour = (TARGET_HOUR_BEIJING - 8 + 24) % 24;
 
-                        const formattedTime = data.sysTime1.replace(' ', 'T') + '+08:00';
-                        const serverTimeOnLoad = new Date(formattedTime).getTime();
+                    // 更稳健地构建目标时间
+                    // 1. 获取当前的UTC日期部分
+                    const year = serverNow.getUTCFullYear();
+                    const month = serverNow.getUTCMonth();
+                    const day = serverNow.getUTCDate();
 
-                        if (isNaN(serverTimeOnLoad)) {
-                            throw new Error(`无法将字符串解析为有效日期: "${formattedTime}"`);
-                        }
-                        // --- 检查结束 ---
+                    // 2. 构建今天的目标时间点 (UTC)
+                    let targetTime = new Date(Date.UTC(year, month, day, targetUTCHour, TARGET_MINUTE_BEIJING, TARGET_SECOND_BEIJING, 0));
+                    GM_log(`初步计算的目标时间 (UTC): ${targetTime.toISOString()}`);
 
-                        const localTimeOnLoad = Date.now();
-                        const timeDifference = serverTimeOnLoad - localTimeOnLoad;
-                        const serverNow = new Date(serverTimeOnLoad);
-                        GM_log(`成功获取并解析时间。服务器UTC时间: ${serverNow.toISOString()}`);
 
-                        const targetUTCHour = (TARGET_HOUR_BEIJING - 8 + 24) % 24;
-                        const year = serverNow.getUTCFullYear();
-                        const month = serverNow.getUTCMonth();
-                        const day = serverNow.getUTCDate();
-                        let targetTime = new Date(Date.UTC(year, month, day, targetUTCHour, TARGET_MINUTE_BEIJING, TARGET_SECOND_BEIJING, 0));
+                    // 3. 如果目标时间点已经过去，则将目标设置为明天
+                    if (targetTime.getTime() < serverNow.getTime()) {
+                        targetTime.setUTCDate(targetTime.getUTCDate() + 1);
+                        GM_log('今天的时间点已过，已将目标设定为明天。');
+                    }
+                    GM_log(`最终确定的目标时间 (UTC): ${targetTime.toISOString()}`);
 
-                        if (targetTime.getTime() < serverNow.getTime()) {
-                            targetTime.setUTCDate(targetTime.getUTCDate() + 1);
-                        }
-                        GM_log(`最终目标UTC时间: ${targetTime.toISOString()}`);
+                    const mainDelay = targetTime.getTime() - serverNow.getTime();
+                    GM_log(`计算出的延迟毫秒数: ${mainDelay}`);
 
-                        const mainDelay = targetTime.getTime() - serverNow.getTime();
-                        GM_log(`计算出的延迟为: ${mainDelay}ms`);
+                    if (mainDelay >= 0) { // 允许延迟为0
+                        setTimeout(postComment, mainDelay);
 
-                        if (mainDelay >= 0) {
-                            setTimeout(postComment, mainDelay);
-                            clockInterval = setInterval(() => {
-                                const currentSyncedTime = new Date(Date.now() + timeDifference);
-                                const remainingMillis = targetTime.getTime() - currentSyncedTime.getTime();
-                                if (remainingMillis <= 0) {
-                                    clearInterval(clockInterval);
-                                    const countdownEl = document.getElementById('gemini-countdown');
-                                    if (countdownEl && countdownEl.textContent.startsWith("倒计时")) {
-                                         countdownEl.textContent = "倒计时: 00:00:00";
-                                    }
-                                    return;
+                        // 启动UI更新定时器
+                        clockInterval = setInterval(() => {
+                            const currentSyncedTime = new Date(Date.now() + timeDifference);
+                            const remainingMillis = targetTime.getTime() - currentSyncedTime.getTime();
+
+                            if (remainingMillis <= 0) {
+                                clearInterval(clockInterval);
+                                // 倒计时结束后，确保UI显示为0或已发送
+                                const countdownEl = document.getElementById('gemini-countdown');
+                                if (countdownEl && countdownEl.textContent.startsWith("倒计时")) {
+                                     countdownEl.textContent = "倒计时: 00:00:00";
                                 }
-                                const beijingTimeString = currentSyncedTime.toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false });
-                                document.getElementById('gemini-beijing-time').textContent = `北京时间: ${beijingTimeString}`;
-                                const hours = padZero(Math.floor(remainingMillis / 3600000));
-                                const minutes = padZero(Math.floor((remainingMillis % 3600000) / 60000));
-                                const seconds = padZero(Math.floor((remainingMillis % 60000) / 1000));
-                                document.getElementById('gemini-countdown').textContent = `倒计时: ${hours}:${minutes}:${seconds}`;
-                            }, 1000);
-                        } else {
-                             GM_log('计算出的延迟时间不正确，脚本停止。');
-                             document.getElementById('gemini-countdown').textContent = "状态: 延迟计算错误";
-                        }
-                    } catch (e) {
-                        GM_log(`解析时间API响应失败: ${e}`);
-                        // 解析失败，也尝试重试
-                        if (retriesLeft > 0) {
-                            GM_log('将在2秒后重试...');
-                            setTimeout(() => fetchTimeWithRetries(retriesLeft - 1), 2000);
-                        } else {
-                            document.getElementById('gemini-countdown').textContent = "状态: 时间同步失败";
-                        }
-                    }
-                },
-                onerror: function(error) {
-                    GM_log(`请求时间API失败: ${JSON.stringify(error)}`);
-                    if (retriesLeft > 0) {
-                        GM_log('将在2秒后重试...');
-                        setTimeout(() => fetchTimeWithRetries(retriesLeft - 1), 2000);
-                    } else {
-                        GM_log('已达到最大重试次数，脚本停止。');
-                        document.getElementById('gemini-countdown').textContent = "状态: 时间同步失败";
-                    }
-                },
-                ontimeout: function() {
-                    GM_log('请求时间API超时。');
-                    if (retriesLeft > 0) {
-                        GM_log('将在2秒后重试...');
-                        setTimeout(() => fetchTimeWithRetries(retriesLeft - 1), 2000);
-                    } else {
-                        GM_log('已达到最大重试次数，脚本停止。');
-                        document.getElementById('gemini-countdown').textContent = "状态: 时间同步失败";
-                    }
-                }
-            });
-        }
+                                return;
+                            }
 
-        // 首次调用，启动获取流程
-        fetchTimeWithRetries(MAX_RETRIES);
-    }""
+                            // 更新北京时间显示
+                            // 使用 toLocaleTimeString 来确保正确显示北京时区的时间
+                            const beijingTimeString = currentSyncedTime.toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false });
+                            document.getElementById('gemini-beijing-time').textContent = `北京时间: ${beijingTimeString}`;
+
+
+                            // 更新倒计时显示
+                            const hours = padZero(Math.floor(remainingMillis / 3600000));
+                            const minutes = padZero(Math.floor((remainingMillis % 3600000) / 60000));
+                            const seconds = padZero(Math.floor((remainingMillis % 60000) / 1000));
+                            document.getElementById('gemini-countdown').textContent = `倒计时: ${hours}:${minutes}:${seconds}`;
+
+                        }, 1000);
+
+                    } else {
+                         GM_log('计算出的延迟时间不正确，脚本停止。');
+                    }
+
+                } catch (e) {
+                    GM_log(`解析时间API响应失败: ${e}`);
+                    document.getElementById('gemini-countdown').textContent = "状态: 时间同步失败";
+                }
+            },
+            onerror: function(error) {
+                GM_log(`请求时间API失败: ${JSON.stringify(error)}`);
+                document.getElementById('gemini-countdown').textContent = "状态: 时间同步失败";
+            }
+        });
+    }
 
     // 脚本开始运行时，立即启动调度程序
     scheduleComment();
