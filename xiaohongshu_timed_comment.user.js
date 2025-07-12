@@ -1,23 +1,20 @@
 // ==UserScript==
 // @name         小红书定时精准评论 (带时钟)
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  在特定小红书页面，于北京时间00:30:00精准发送评论“p”，并显示北京时间和倒计时。
 // @author       Gemini
 // @match        https://www.xiaohongshu.com/explore/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_log
-// @connect      worldtimeapi.org
+// @connect      quan.suning.com
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     // ---! 重要：请将您找到的选择器粘贴到这里 !---
-    // 步骤1: 右键点击评论输入框 -> 检查 -> 复制选择器 -> 粘贴到这里
     const COMMENT_INPUT_SELECTOR = '#content-textarea';
-
-    // 步骤2: 右键点击发送按钮 -> 检查 -> 复制选择器 -> 粘贴到这里
     const SEND_BUTTON_SELECTOR = '.submit';
     // ---! 修改结束 !---
 
@@ -27,8 +24,8 @@
     const TARGET_MINUTE_BEIJING = 30;
     const TARGET_SECOND_BEIJING = 0;
 
-    // 改为HTTPS以避免混合内容错误
-    const TIME_API_URL = 'https://worldtimeapi.org/api/timezone/Asia/Shanghai';
+    // 使用苏宁的时间API
+    const TIME_API_URL = 'https://quan.suning.com/getSysTime.do';
 
     let clockInterval; // 用于存储定时器ID，方便后续清除
 
@@ -118,7 +115,10 @@
             onload: function(response) {
                 try {
                     const data = JSON.parse(response.responseText);
-                    const serverTimeOnLoad = new Date(data.datetime).getTime();
+                    // 苏宁API返回格式: {"sysTime1":"2025-07-12 17:00:00","sysTime2":"20250712170000"}
+                    // 为了兼容Date.parse，需要将空格替换为'T'
+                    const formattedTime = data.sysTime1.replace(' ', 'T');
+                    const serverTimeOnLoad = new Date(formattedTime).getTime();
                     const localTimeOnLoad = Date.now();
                     const timeDifference = serverTimeOnLoad - localTimeOnLoad;
 
