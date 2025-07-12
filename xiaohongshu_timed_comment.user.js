@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小红书定时精准评论 (带时钟)
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  在特定小红书页面，于北京时间00:30:00精准发送评论“p”，并显示北京时间和倒计时。
 // @author       Gemini
 // @match        https://www.xiaohongshu.com/explore/*
@@ -116,40 +116,65 @@
                 try {
                     const data = JSON.parse(response.responseText);
                     // 苏宁API返回格式: {"sysTime1":"2025-07-12 17:00:00","sysTime2":"20250712170000"}
-                    // 为了兼容Date.parse，需要将空格替换为'T'
-                    const formattedTime = data.sysTime1.replace(' ', 'T');
+                    // API时间是北京时间 (UTC+8)。我们必须指明时区，否则Date.parse会使用本地时区。
+                    const formattedTime = data.sysTime1.replace(' ', 'T') + '+08:00';
                     const serverTimeOnLoad = new Date(formattedTime).getTime();
                     const localTimeOnLoad = Date.now();
+                    // timeDifference 用于校准本地时钟与服务器时钟的偏差
                     const timeDifference = serverTimeOnLoad - localTimeOnLoad;
 
-                    let targetTime = new Date(serverTimeOnLoad);
-                    targetTime.setHours(TARGET_HOUR_BEIJING, TARGET_MINUTE_BEIJING, TARGET_SECOND_BEIJING, 0);
+                    // --- 使用UTC进行所有日期计算以避免时区问题 ---
+                    const serverNow = new Date(serverTimeOnLoad);
+                    GM_log(`当前服务器时间 (UTC): ${serverNow.toISOString()}`);
 
-                    if (serverTimeOnLoad > targetTime.getTime()) {
-                        targetTime.setDate(targetTime.getDate() + 1);
+                    // 设定目标时间为北京时间 00:30:00
+                    // 北京时间 (UTC+8) 的 00:30 对应 UTC 时间的 16:30
+                    const targetUTCHour = (TARGET_HOUR_BEIJING - 8 + 24) % 24;
+
+                    // 更稳健地构建目标时间
+                    // 1. 获取当前的UTC日期部分
+                    const year = serverNow.getUTCFullYear();
+                    const month = serverNow.getUTCMonth();
+                    const day = serverNow.getUTCDate();
+
+                    // 2. 构建今天的目标时间点 (UTC)
+                    let targetTime = new Date(Date.UTC(year, month, day, targetUTCHour, TARGET_MINUTE_BEIJING, TARGET_SECOND_BEIJING, 0));
+                    GM_log(`初步计算的目标时间 (UTC): ${targetTime.toISOString()}`);
+
+
+                    // 3. 如果目标时间点已经过去，则将目标设置为明天
+                    if (targetTime.getTime() < serverNow.getTime()) {
+                        targetTime.setUTCDate(targetTime.getUTCDate() + 1);
                         GM_log('今天的时间点已过，已将目标设定为明天。');
                     }
+                    GM_log(`最终确定的目标时间 (UTC): ${targetTime.toISOString()}`);
 
-                    const mainDelay = targetTime.getTime() - serverTimeOnLoad;
+                    const mainDelay = targetTime.getTime() - serverNow.getTime();
+                    GM_log(`计算出的延迟毫秒数: ${mainDelay}`);
 
-                    if (mainDelay > 0) {
+                    if (mainDelay >= 0) { // 允许延迟为0
                         setTimeout(postComment, mainDelay);
 
                         // 启动UI更新定时器
                         clockInterval = setInterval(() => {
-                            const currentBeijingTime = new Date(Date.now() + timeDifference);
-                            const remainingMillis = targetTime.getTime() - currentBeijingTime.getTime();
+                            const currentSyncedTime = new Date(Date.now() + timeDifference);
+                            const remainingMillis = targetTime.getTime() - currentSyncedTime.getTime();
 
                             if (remainingMillis <= 0) {
                                 clearInterval(clockInterval);
+                                // 倒计时结束后，确保UI显示为0或已发送
+                                const countdownEl = document.getElementById('gemini-countdown');
+                                if (countdownEl && countdownEl.textContent.startsWith("倒计时")) {
+                                     countdownEl.textContent = "倒计时: 00:00:00";
+                                }
                                 return;
                             }
 
                             // 更新北京时间显示
-                            const bjHours = padZero(currentBeijingTime.getHours());
-                            const bjMinutes = padZero(currentBeijingTime.getMinutes());
-                            const bjSeconds = padZero(currentBeijingTime.getSeconds());
-                            document.getElementById('gemini-beijing-time').textContent = `北京时间: ${bjHours}:${bjMinutes}:${bjSeconds}`;
+                            // 使用 toLocaleTimeString 来确保正确显示北京时区的时间
+                            const beijingTimeString = currentSyncedTime.toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false });
+                            document.getElementById('gemini-beijing-time').textContent = `北京时间: ${beijingTimeString}`;
+
 
                             // 更新倒计时显示
                             const hours = padZero(Math.floor(remainingMillis / 3600000));
