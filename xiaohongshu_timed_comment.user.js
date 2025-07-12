@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小红书定时精准评论 (带时钟)
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      1.8
 // @description  在特定小红书页面，于北京时间00:30:00精准发送评论“p”，并显示北京时间和倒计时。
 // @author       Gemini
 // @match        https://www.xiaohongshu.com/explore/*
@@ -100,9 +100,32 @@
                         const data = JSON.parse(response.responseText);
                         if (!data || !data.sysTime1) { throw new Error("API响应格式不完整。"); }
 
-                        const formattedTime = data.sysTime1.replace(' ', 'T') + '+08:00';
-                        const serverTimeOnLoad = new Date(formattedTime).getTime();
-                        if (isNaN(serverTimeOnLoad)) { throw new Error(`无效的日期格式: "${formattedTime}"`); }
+                        let formattedTime;
+                        const rawTime = data.sysTime1;
+
+                        // 检查API返回的时间格式并进行相应处理
+                        if (rawTime.includes('-')) {
+                            // 格式: "YYYY-MM-DD HH:MM:SS"
+                            formattedTime = rawTime.replace(' ', 'T');
+                        } else if (rawTime.length === 14 && !isNaN(rawTime)) {
+                            // 格式: "YYYYMMDDHHMMSS"
+                            const year   = rawTime.substring(0, 4);
+                            const month  = rawTime.substring(4, 6);
+                            const day    = rawTime.substring(6, 8);
+                            const hour   = rawTime.substring(8, 10);
+                            const minute = rawTime.substring(10, 12);
+                            const second = rawTime.substring(12, 14);
+                            formattedTime = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+                        } else {
+                            // 未知或错误的格式
+                            throw new Error(`未知的日期格式: "${rawTime}"`);
+                        }
+
+                        // 所有格式都必须附加时区信息才能被正确解析
+                        const isoTimeWithTimezone = formattedTime + '+08:00';
+                        const serverTimeOnLoad = new Date(isoTimeWithTimezone).getTime();
+
+                        if (isNaN(serverTimeOnLoad)) { throw new Error(`无法将处理后的日期解析为有效时间: "${isoTimeWithTimezone}"`); }
 
                         const timeDifference = serverTimeOnLoad - Date.now();
                         const serverNow = new Date(serverTimeOnLoad);
